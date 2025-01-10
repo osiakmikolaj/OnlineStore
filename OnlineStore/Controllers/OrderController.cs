@@ -1,27 +1,45 @@
-﻿using Microsoft.AspNetCore.Http;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using OnlineStore.Areas.Identity.Data;
 using OnlineStore.Models;
 
 namespace OnlineStore.Controllers
 {
+    [Authorize]
     public class OrderController : Controller
     {
-        private static IList<Order> orders = new List<Order>();
+        private readonly AplicationDBContext _context;
+        private readonly UserManager<ApplicationUser> _userManager;
+
+        public OrderController(AplicationDBContext context, UserManager<ApplicationUser> userManager)
+        {
+            _context = context;
+            _userManager = userManager;
+        }
 
         // GET: OrderController
-        public ActionResult Index()
+        public async Task<IActionResult> Index()
         {
+            var userId = _userManager.GetUserId(User);
+            var orders = await _context.Orders.Where(o => o.UserId == userId).ToListAsync();
             return View(orders);
         }
 
         // GET: OrderController/Details/5
-        public ActionResult Details(int id)
+        public async Task<IActionResult> Details(int id)
         {
-            return View(orders.FirstOrDefault(x => x.OrderId == id));
+            var order = await _context.Orders.Include(o => o.OrderProducts).ThenInclude(op => op.Product).FirstOrDefaultAsync(x => x.OrderId == id);
+            if (order == null)
+            {
+                return NotFound();
+            }
+            return View(order);
         }
 
         // GET: OrderController/Create
-        public ActionResult Create()
+        public IActionResult Create()
         {
             return View(new Order());
         }
@@ -29,64 +47,57 @@ namespace OnlineStore.Controllers
         // POST: OrderController/Create
         [HttpPost]
         [ValidateAntiForgeryToken]
-        public ActionResult Create(Order order)
+        public async Task<IActionResult> Create(Order order)
         {
-            try
+            if (ModelState.IsValid)
             {
-                order.OrderId = orders.Max(x => x.OrderId) + 1;
-                orders.Add(order);
+                var userId = _userManager.GetUserId(User);
+                order.UserId = userId;
+                order.TotalPrice = CalculateTotalPrice(order);
+                _context.Add(order);
+                await _context.SaveChangesAsync();
                 return RedirectToAction(nameof(Index));
             }
-            catch
-            {
-                return View();
-            }
-        }
-
-        // GET: OrderController/Edit/5
-        public ActionResult Edit(int id)
-        {
-            return View(orders.FirstOrDefault(x => x.OrderId == id));
-        }
-
-        // POST: OrderController/Edit/5
-        [HttpPost]
-        [ValidateAntiForgeryToken]
-        public ActionResult Edit(int id, Order order)
-        {
-            try
-            {
-                order = orders.FirstOrDefault(x => x.OrderId == id);
-                order.CustomerName = order.CustomerName;
-                order.CustomerEmail = order.CustomerEmail;
-                order.Products = order.Products;
-                return RedirectToAction(nameof(Index));
-            }
-            catch
-            {
-                return View();
-            }
+            return View(order);
         }
 
         // GET: OrderController/Delete/5
-        public ActionResult Delete(int id)
+        public async Task<IActionResult> Delete(int id)
         {
-            return View();
+            var order = await _context.Orders.FirstOrDefaultAsync(x => x.OrderId == id);
+            if (order == null)
+            {
+                return NotFound();
+            }
+            return View(order);
         }
 
         // POST: OrderController/Delete/5
-        [HttpPost]
+        [HttpPost, ActionName("Delete")]
         [ValidateAntiForgeryToken]
-        public ActionResult Delete(int id, IFormCollection collection)
+        public async Task<IActionResult> DeleteConfirmed(int id)
         {
-            try
+            var order = await _context.Orders.Include(o => o.OrderProducts).FirstOrDefaultAsync(x => x.OrderId == id);
+            if (order == null)
             {
-                return RedirectToAction(nameof(Index));
+                return NotFound();
             }
-            catch
-            {
-                return View();
-            }
+
+            _context.OrderProducts.RemoveRange(order.OrderProducts);
+
+            _context.Orders.Remove(order);
+            await _context.SaveChangesAsync();
+            return RedirectToAction(nameof(Index));
+        }
+
+        private bool OrderExists(int id)
+        {
+            return _context.Orders.Any(e => e.OrderId == id);
+        }
+
+        private int CalculateTotalPrice(Order order)
+        {
+            return (int)(order.OrderProducts?.Sum(op => op.Product.Price * op.Quantity) ?? 0);
         }
     }
 }

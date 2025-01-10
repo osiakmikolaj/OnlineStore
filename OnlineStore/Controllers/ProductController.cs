@@ -1,34 +1,46 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Newtonsoft.Json;
+using OnlineStore.Areas.Identity.Data;
 using OnlineStore.Models;
-using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace OnlineStore.Controllers
 {
+    [Authorize]
     public class ProductController : Controller
     {
-        // Product list
-        private static IList<Product> products = new List<Product>
+        private readonly AplicationDBContext _context;
+        private readonly UserManager<ApplicationUser> _userManager;
+
+        public ProductController(AplicationDBContext context, UserManager<ApplicationUser> userManager)
         {
-            new Product() { Id = 1, Name = "Laptop", Description = "High-performance laptop", Price = 3500 },
-            new Product() { Id = 2, Name = "Smartphone", Description = "Latest model smartphone", Price = 2600 },
-            new Product() { Id = 3, Name = "Tablet", Description = "Lightweight tablet", Price = 1400 }
-        };
+            _context = context;
+            _userManager = userManager;
+        }
 
         // GET: /Product/
-        public ActionResult Index()
+        public async Task<IActionResult> Index()
         {
-            return View(products);
+            return View(await _context.Products.ToListAsync());
         }
 
         // GET: /Product/Details/
-        public ActionResult Details(int id)
+        public async Task<IActionResult> Details(int id)
         {
-            return View(products.FirstOrDefault(x => x.Id == id));
+            var product = await _context.Products.FirstOrDefaultAsync(x => x.Id == id);
+            if (product == null)
+            {
+                return NotFound();
+            }
+            return View(product);
         }
 
         // GET: /Product/Create/
-        public ActionResult Create()
+        public IActionResult Create()
         {
             return View(new Product());
         }
@@ -36,66 +48,185 @@ namespace OnlineStore.Controllers
         // POST: /Product/Create/
         [HttpPost]
         [ValidateAntiForgeryToken]
-        public ActionResult Create(Product product)
+        public async Task<IActionResult> Create(Product product)
         {
-            try
+            if (ModelState.IsValid)
             {
-                product.Id = products.Max(x => x.Id) + 1;
-                products.Add(product);
+                _context.Add(product);
+                await _context.SaveChangesAsync();
                 return RedirectToAction(nameof(Index));
             }
-            catch
-            { 
-                return View();
-            }
+            return View(product);
         }
 
         // GET: /Product/Edit/
-        public ActionResult Edit(int id)
+        public async Task<IActionResult> Edit(int id)
         {
-            return View(products.FirstOrDefault(x => x.Id == id));
+            var product = await _context.Products.FindAsync(id);
+            if (product == null)
+            {
+                return NotFound();
+            }
+            return View(product);
         }
 
         // POST: /Product/Edit/
         [HttpPost]
         [ValidateAntiForgeryToken]
-        public ActionResult Edit(int id, Product product)
+        public async Task<IActionResult> Edit(int id, Product product)
         {
-            try
+            if (id != product.Id)
             {
-                product = products.FirstOrDefault(x => x.Id == id);
-                product.Name = product.Name;
-                product.Description = product.Description;
-                product.Price = product.Price;
+                return NotFound();
+            }
+
+            if (ModelState.IsValid)
+            {
+                try
+                {
+                    _context.Update(product);
+                    await _context.SaveChangesAsync();
+                }
+                catch (DbUpdateConcurrencyException)
+                {
+                    if (!ProductExists(product.Id))
+                    {
+                        return NotFound();
+                    }
+                    else
+                    {
+                        throw;
+                    }
+                }
                 return RedirectToAction(nameof(Index));
             }
-            catch
-            {
-                return View();
-            }
+            return View(product);
         }
 
         // GET: /Product/Delete/
-        public ActionResult Delete(int id)
+        public async Task<IActionResult> Delete(int id)
         {
-            return View(products.FirstOrDefault(x => x.Id == id));
+            var product = await _context.Products.FirstOrDefaultAsync(x => x.Id == id);
+            if (product == null)
+            {
+                return NotFound();
+            }
+            return View(product);
         }
 
         // POST: /Product/Delete/
-        [HttpPost]
+        [HttpPost, ActionName("Delete")]
         [ValidateAntiForgeryToken]
-        public ActionResult Delete(int id, Product product)
+        public async Task<IActionResult> DeleteConfirmed(int id)
         {
-            try
-            { 
-                product = products.FirstOrDefault(x => x.Id == id);
-                products.Remove(product);
+            var product = await _context.Products.FindAsync(id);
+            _context.Products.Remove(product);
+            await _context.SaveChangesAsync();
+            return RedirectToAction(nameof(Index));
+        }
+
+        private bool ProductExists(int id)
+        {
+            return _context.Products.Any(e => e.Id == id);
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> AddToOrder(int productId, int quantity)
+        {
+            var product = await _context.Products.FindAsync(productId);
+            if (product == null)
+            {
+                return NotFound();
+            }
+
+            var order = GetOrderFromSession();
+            var orderProduct = order.OrderProducts.FirstOrDefault(op => op.ProductId == productId);
+            if (orderProduct != null)
+            {
+                orderProduct.Quantity += quantity;
+            }
+            else
+            {
+                order.OrderProducts.Add(new OrderProduct { ProductId = productId, Quantity = quantity, Product = product });
+            }
+            SaveOrderToSession(order);
+
+            return RedirectToAction(nameof(Index));
+        }
+
+        [HttpPost]
+        public async Task<IActionResult> CreateOrder()
+        {
+            var order = GetOrderFromSession();
+            if (order.OrderProducts.Count == 0)
+            {
                 return RedirectToAction(nameof(Index));
             }
-            catch
+
+            var userId = _userManager.GetUserId(User);
+            var user = await _userManager.FindByIdAsync(userId);
+            if (user == null)
             {
-                return View();
+                return NotFound("User not found");
             }
+
+            order.UserId = userId;
+            order.CustomerName = $"{user.FirstName} {user.LastName}";
+            order.CustomerEmail = user.Email;
+            order.TotalPrice = (int)CalculateTotalPrice(order);
+
+            // Powiąż istniejące produkty z zamówieniem
+            foreach (var orderProduct in order.OrderProducts)
+            {
+                _context.Entry(orderProduct.Product).State = EntityState.Unchanged;
+            }
+
+            _context.Orders.Add(order);
+            await _context.SaveChangesAsync();
+
+            ClearOrderFromSession();
+
+            return RedirectToAction("Details", "Order", new { id = order.OrderId });
+        }
+
+
+        private Order GetOrderFromSession()
+        {
+            var orderJson = HttpContext.Session.GetString("Order");
+            if (string.IsNullOrEmpty(orderJson))
+            {
+                return new Order { OrderProducts = new List<OrderProduct>() };
+            }
+            return JsonConvert.DeserializeObject<Order>(orderJson);
+        }
+
+        private void SaveOrderToSession(Order order)
+        {
+            var orderJson = JsonConvert.SerializeObject(order);
+            HttpContext.Session.SetString("Order", orderJson);
+        }
+
+        private void ClearOrderFromSession()
+        {
+            HttpContext.Session.Remove("Order");
+        }
+
+        private decimal CalculateTotalPrice(Order order)
+        {
+            return order.OrderProducts?.Sum(op => op.Product.Price * op.Quantity) ?? 0;
+        }
+
+        [HttpPost]
+        public IActionResult RemoveFromOrder(int productId)
+        {
+            var order = GetOrderFromSession();
+            var orderProduct = order.OrderProducts.FirstOrDefault(op => op.ProductId == productId);
+            if (orderProduct != null)
+            {
+                order.OrderProducts.Remove(orderProduct);
+                SaveOrderToSession(order);
+            }
+            return RedirectToAction(nameof(Index));
         }
     }
 }

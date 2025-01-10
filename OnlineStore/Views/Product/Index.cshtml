@@ -1,0 +1,70 @@
+﻿@using Newtonsoft.Json
+@model IEnumerable<OnlineStore.Models.Product>
+
+@{
+    ViewData["Title"] = "Products";
+    var order = JsonConvert.DeserializeObject<Order>(Context.Session.GetString("Order") ?? "{}");
+}
+
+<h1>Products</h1>
+
+@if (order?.OrderProducts?.Count > 0)
+{
+    <h2>Your Order</h2>
+    <ul>
+        @foreach (var orderProduct in order.OrderProducts)
+        {
+            <li>
+                @orderProduct.Product.Name - @orderProduct.Product.Price.ToString("C") x @orderProduct.Quantity
+                <form asp-controller="Product" asp-action="RemoveFromOrder" method="post" style="display:inline;">
+                    <input type="hidden" name="productId" value="@orderProduct.ProductId" />
+                    <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+                </form>
+            </li>
+        }
+    </ul>
+    <form asp-controller="Product" asp-action="CreateOrder" method="post">
+        <button type="submit" class="btn btn-primary">Create Order</button>
+    </form>
+    <br />
+}
+
+<p>
+    @if (User.IsInRole("Admin"))
+    {
+        <a asp-controller="Product" asp-action="Create" class="btn btn-primary">Create New Product</a>
+    }
+</p>
+
+<div class="row">
+    @foreach (var product in Model)
+    {
+        <div class="col-md-4">
+            <div class="card mb-4 shadow-sm">
+                <a asp-controller="Product" asp-action="Details" asp-route-id="@product.Id">
+                    <img src="https://placehold.co/400x600" class="card-img-top" alt="Product Image">
+                </a>
+                <div class="card-body">
+                    <h5 class="card-title">
+                        <a asp-controller="Product" asp-action="Details" asp-route-id="@product.Id">@product.Name</a>
+                    </h5>
+                    <p class="card-text">@product.Price.ToString("C")</p>
+                    <form asp-controller="Product" asp-action="AddToOrder" method="post">
+                        <input type="hidden" name="productId" value="@product.Id" />
+                        <div class="form-group">
+                            <label for="quantity">Quantity</label>
+                            <input type="number" name="quantity" class="form-control" value="1" min="1" />
+                        </div>
+                        <br />
+                        <button type="submit" class="btn btn-success">Add to Order</button>
+                        <br />
+                    </form>
+                    <br />
+                    @if (User.IsInRole("Admin"))
+                    {
+                        <a asp-controller="Product" asp-action="Edit" asp-route-id="@product.Id" class="btn btn-primary">Edit</a>
+                    }
+                </div>
+            </div>
+        </div>
+    }
